@@ -291,6 +291,7 @@ class PacketFilter:
 
     def format_packet_data(packet_details):
         try:
+            #making names for user to use
             field_mapping = {
                 "protocol" : "Protocol",
                 "src_ip" : "Source IP",
@@ -301,17 +302,20 @@ class PacketFilter:
                 "mac_dst" : "Destination MAC"
             }
 
+            #formating the packet data with defined mapping
             formated_data = {
                 display_name: packet_details.get(field, "N/A")
                 for field, display_name in field_mapping.items()
             }
 
+            #additional info if avaible with keys
             if packet_details.get("additional_info"):
                 for key, value in packet_details["additional_info"].items():
+                    #replaceing underscores with spaces and capitalize
                     formated_data[key,replace("_", " ").title()] = value
             return formated_data
 
-        except Exception as exception:
+        except Exception as exception: #error handling during formating
             print(f"Problem formatting: {packet_details}.Error: {exception}")
             return None
 
@@ -319,16 +323,19 @@ class PacketFilter:
 
     def handle_corrupted_packets(packet, required_layers = None):
         try: 
+            # default for layer ethernet
             if required_layers is None:
                 required_layers = [Ether] # modified to only require Ether for IPv6 support
             
+
+            #checking if all requered layers are present
             for layer in required_layers:
                 if not packet.haslayer(layer):
                     print(f"Packet missing layer: {layer.__name__}")
                     return False
             return True
         
-        except Exception as exception:
+        except Exception as exception: #error handling durig validation
             print(f"Problem validating packet: {packet.summary() if packet else 'None'}.Exception: {exception}")
             return False
 
@@ -337,7 +344,7 @@ class PacketFilter:
     def summarize_packet(packet_details, summary_format = None):
         try:
             if not packet_details:
-                return "Invalid packet details"
+                return "Invalid packet details" # handle case where packet details missing
 
             if summary_format is None:
                 summary_format = "[{protocol}] {src_ip}:{src_port} -> {dst_ip}:{dst_port}"
@@ -351,6 +358,7 @@ class PacketFilter:
                 "dst_port" : "N/A"
             }
 
+            #populate data
             data = {key:packet_details.get(key, default) for key, default in defaults.items()}
             
             #Protocol info added to summary
@@ -362,7 +370,7 @@ class PacketFilter:
                     if "tcp_flags" in additional_info and additional_info["tcp_flags"]:
                         summary_format += "[{tcp_flags}]"
                         data["tcp_flags"] = additional_info["tcp_flags"]
-                        if "connection_state" in additional_info:
+                        if "connection_state" in additional_info: #append DNS to dummstx
                             summary_format += "({connection_state})"
                             data["connection_state"] = additional_info["connection_state"]
 
@@ -417,10 +425,12 @@ class PacketFilter:
                     if ip_info_parts:
                         summary_format += f"[{', '.join(ip_info_parts)}]"
 
+
+            #summary generaed
             return summary_format.format(**data)
 
 
-        except Exception as exception:
+        except Exception as exception: #error handling during creation of summary
             print(f"Error with summarizing packet: {packet_details}. Exception: {exception}")
             return "Problem with creating summary of packet"
 
@@ -492,7 +502,7 @@ class NetworkMonitor:
         return True
 
     
-class PacketStats:
+class PacketStats: # tracks and manages statistics for captured network packets
     def __init__ (self):
         self.packet_counts = Counter()
         self.total_packets = 0
@@ -518,7 +528,7 @@ def process_packet_gui(packet, active_filters = None, stats = None, output_queue
             return
 
 
-        if stats is not None:
+        if stats is not None: #incrementing couts for protocols
             stats.total_packets += 1
             stats.current_packet_number += 1
             stats.packet_counts[packet_details['protocol']] += 1
