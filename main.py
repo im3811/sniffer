@@ -685,3 +685,247 @@ def disable_promiscous_mode(interface): #disable promiscuos mode
     except Exception as e:
         print(f"Unexpected error disabling promiscuos mode: {e}")
         return False
+
+    class PacketSnifferGUI:
+        def __init__(self,root):
+            self.root = root
+            self.root.title("Network Packet Sniffer ")
+
+            self.is_capturing = False
+            self.packet_stats = PacketStats()
+            self.stop_sniffing = threading.Event()
+            self.output_queue = queue.Queue()
+
+            self.setup_ui()
+
+        def setup_ui(self):
+            #Settings Frame
+            settings_frame = ttk.Labelframe(self.root, text = "Capture Settings")
+            settings_frame.pack(fill='x', padx=5, pady=5)
+
+            #Interface selection
+            ttk.Label(settings_frame, text="Interface:").grid(row=0, column=0, sticky='w')
+            interfaces = NetworkMonitor.get_interface_details()
+            self.interface_var = tk.StringVar()
+            self.interface_combo = ttk.Combobox(settings_frame, textvariable=self.interface_var)
+            self.interface_combo['values'] = list(interfaces.keys())
+            self.interface_combo.current(0)
+            self.interface_combo.grid(row=0, column=1, sticky='w')
+
+            #Packet Count
+            ttk.Label(settings_frame, text="Packet Count (0=unlimited):").grid(row=0, column=2, sticky='w')
+            self.packet_count_var = tk.IntVar(value=0)
+            self.packet_count_spin = ttk.Spinbox(settings_frame, from_=0, to=1000000, textvariable=self.packet_count_var)
+            self.interface_combo.grid(row=0, column=1,sticky='w')
+
+
+            #Timeout
+            ttk.Label(settings_frame, text="Timeout (sec):").grid(row=1, column=0, sticky='w')
+            self.timeout_var = tk.IntVar(value=10)
+            self.timeout_spin = ttk.Spinbox(settings_frame, from_=0, to=1000000, textvariable=self.timeout_var)
+            self.timeout_spin.grid(row=1, column=1, sticky='w')
+
+            #Target IP
+            ttk.Label(settings_frame, text="Target IP:").grid(row=1, column=2, sticky='w')
+            self.target_ip_var = tk.StringVar()
+            self.target_ip_var = ttk.Entry(settings_frame, textvariable=self.target_ip_var)
+            self.target_ip_entry.grid(row=1, column=3, sticky='w')
+        
+            #Promiscous mode
+            self.promiscuos_var = tk.BooleanVar()
+            self.promiscuos_check = ttk.Checkbutton(settings_frame, text="Promiscous Mode", variable=self.promiscuos_var)
+            self.promiscuos_check.grid(row=2,column=0, sticky='w')
+
+            ttk.Label(settings_frame, text="Protocol Filters:").grid(row=3, column=0, sticky='w')
+            self.protocol_vars = {}
+            protocol_frame = ttk.Frame(settings_frame)
+            protocol_frame.grid(row=3, column=1, columnspan=3, sticky='w')
+            for proto in AVAILABLE_PROTOCOLS:
+                var = tk.BooleanVar(value=False)
+                cb = ttk.Checkbutton(protocol_frame, text=proto, variable=var, command=self.update_protocol_selection)
+                cb.pack(side='left')
+                self.protocol_vars[proto] = var
+            
+            self.start_button = ttk.Button(settings_frame, text="Start Capture", command=self.start_capture)
+            self.start_button.grid(row = 4, column=0, pady=5)
+            self.stop_button=ttk.Button(settings_frame, text="Stop Capture", command=self.stop_capture, state='disabled')
+            top_button = ttk.Button(settings_frame, text="Stop Capture", command=self.stop_capture, state='disabled')
+            self.stop_button.grid(row =4, column=1, pady=5)
+
+            #Output area
+            self.output_text = scrolledtext.ScrolledText(self.root, state='disabled', width=100, height=30)
+            self.output_text.pack(fill='both', expand=True, padx=5, pady=5)
+
+            self.root.after(1000,self.update_output)
+
+        def update_protocol_selection(self):
+            if self.protocol_vars['ALL'].get():
+
+                for proto, var in self.protocol_vars.items():
+                    if proto != 'ALL':
+                        var.set(False)
+            else:
+
+                selected_protocols = [proto for proto, var in self.promiscuos_vars.items() if var.get()]
+                if selected_protocols:
+                    self.protocol_vars['ALL'].set(False)
+
+        
+        def start_capture(self):
+            if self.is_capturing:
+                return
+            self.is_capturing = True
+            self.start_button.config(state='disabled')
+            self.stop_button.config(state='normal')
+            self.output_text.config(state='normal')
+            self.output_text.delete('1.0',tk.END)
+            self.output_text.config(state='disabled')
+            self.packet_stats = PacketStats()
+            self.stop_sniffing.clear()
+            self.output_queue = queue.Queue()
+
+            interface = self.interface_var.get()
+            packet_count = self.packet_count_var.get()
+            timeout - self.timeout_var.get()
+            target_ip = self.target_ip_var.get()
+            promiscous = self.promiscuos_var.get()
+
+            selected_protocols = [proto for proto, var in self.protocol_vars.items() if var.get()]
+            if not selected_protocols:
+                messagebox.showerror("Error","Please select at least one protocol to capture.")
+                self.is_capturing = False
+                self.start_button.config(state='normal')
+                self.stop_button.config(state='disabled')
+                return
+
+            active_filters = PacketFilter(selected_protocols, target_ip)
+
+            if promiscous and os.name != 'nt':
+                if os.geteuid() != 0:
+                    messagebox.showerror("Error", "Root privileges required for promiscous mode")
+                    self.is_capturing = False
+                    self.start_button.config(state='normal')
+                    self.stop_button.config(state=disabled)
+                    return
+                enable_promiscous_mode(interface)
+
+            packet_count = int(packet_count)
+            if packet_count <= 0:
+                packet_count = 0
+
+            def packet_handlet(pkt):
+                process_packet_gui(pkt, active_filters, stats=self.packet_stats, output_queue=self.output_queue)
+
+            self.sniffer = AsyncScniffer (
+                iface = interface,
+                prn=packet_handler,
+                store=False,
+                count=packet_count
+            )
+
+            self.sniffer.start()
+
+            timeout = int(timeout)
+
+            if timeout > 0:
+                self.root.after(timeout * 1000, self.stop_capture)
+
+        def stop_capture(self):
+            if self.is_capturing and hasattr(self, 'sniffer'):
+                if self.sniffer.running:
+                    self.sniffer.stop()
+                self.sniffer = None
+            self.is_capturing = False
+            self.start_button.config(state='normal')
+            self.stop_button.config(state='disabled')
+
+            if self.promiscuos_var.get() and os.name != 'nt':
+                disable_promiscous_mode(self.interface_var.get())
+
+            self.output_text.config(state='normal')
+
+            final_summary = self.generate_final_summary()
+            self.output_text.insert(tk.END, '\n' + final_summary + '\n')
+            self.output_text.see(tk.END)
+
+            self.output_text.config(state='disabled')
+
+        def generate_final_summary(self):
+            stats = self.packet_stats
+            summary_lines = []
+            summary_lines.append("=" * 60)
+            summary_lines.append("Packet Capture Statistics")
+            summary_lines.append("=" * 60)
+
+            duration = (datetime.now() - stats.start_time).total_seconds()
+            summary_lines.append(f"Duration: {int(duration)} seconds")
+
+            summary_lines.append(f"Total Packets (Selected Protocols): {stats.total_packets}")
+            summary_lines.append(f"Total Bytes (Selected Protocols): {stats.total_bytes}")
+
+            summary_lines.append("\nTraffic Rates (Selected Protocols):")
+            summary_lines.append("-" * 30)
+            if duration > 0:
+                packets_per_minute = (stats.total_packets / duration) * 60
+                bytes_per_second = stats.total_bytes / duration
+                mbytes_per_second = bytes_per_second / (1024 * 1024)
+            else:
+                packets_per_minute = stats.total_packets * 60
+                bytes_per_second = stats.total_bytes
+                mbytes_per_second = bytes_per_second / (1024 * 1024)
+            
+            summary_lines.append(f"Packets/minute: {packets_per_minute:.2f}")
+            summary_lines.append(f"Bytes/second: {bytes_per_second:.2f}")
+            summary_lines.append(f"MBytes/second: {mbytes_per_second:.3f}")
+
+            # Protocol Distribution
+            summary_lines.append("\nProtocol Distribution")
+            summary_lines.append("-" * 30)
+            for protocol, count in stats.packet_counts.items():
+                percentage = (count / stats.total_packets) * 100 if stats.total_packets > 0 else 0
+                bytes_count = stats.protocol_bytes.get(protocol, 0)
+                summary_lines.append(f"{protocol:<5}: {count:5} packets ({percentage:.2f})% - {bytes_count} bytes")
+
+
+            summary_lines.append("\nTop Source Ports:")
+            summary_lines.append("-" * 30)
+            top_src_ports = Counter(stats.port_stats['src']).most_common(5)
+            for port, count in top_src_ports:
+                service_name = get_service_name(port)
+                summary_lines.append(f"Port {port:<6} ({service_name:<7}): {count:5} packets")
+            
+            summary_lines.append("\nTop SOurce IPs:")
+            summary_lines.append("-" * 30)
+            top_src_ips = Counter(stats.ip_stats['src']).most_common(5)
+            for ip, count in top_src_ips:
+                summary_lines.append(f"{ip:<15}: {count:5} packets")
+
+            summary_lines.append("=" * 60)
+            summary_lines.append("\nSniffing complete. Exiting")
+            final_summary = '\n'.join(summary_lines)
+            return final_summary
+
+        def update_output(self):
+            while not self.output_queue.empty():
+                output = self.output_queue.get()
+                self.output_text.config(state='normal')
+                self.output_text.insert(tk.END, output + "\n")
+                self.output_text.config(state='disabled')
+                self.output_text.see(tk.END)
+            self.root.after(1000, self.update_output)
+
+
+    def main():
+        root = tk.Tk()
+        app = PacketSnifferGUI(root)
+        root.mainloop()
+
+    
+    if __name__ == "__main__":
+        main()
+
+
+
+
+
+
