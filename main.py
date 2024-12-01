@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox 
 
 from scapy.all import (
-    AsyncScniffer, Ether , IP, TCP, UDP, ICMP,
+    AsyncSniffer, Ether , IP, TCP, UDP, ICMP,
     DHCP, BOOTP, DNS, IPv6, ARP, Raw, conf, get_if_list, get_if_addr, get_working_if
 )
 from scapy.arch import get_if_raw_addr
@@ -54,8 +54,8 @@ class PacketFilter:
         """
         Initializes the filter with optional protocols and target IP.
         """
-        self.protocols = protocols or ['All']
-        self.protocols = [p.upper() for p in self.potocols]
+        self.protocols = protocols or ['ALL']
+        self.protocols = [p.upper() for p in self.protocols]
         self.target_ip = target_ip
 
     def matches_filter(self, packet_details):
@@ -84,14 +84,14 @@ class PacketFilter:
             
         # Check IP filter if target_ip is specified
         if self.target_ip:
-            src_ip = packet_details.get('scr_ip')
+            src_ip = packet_details.get('src_ip')
             dst_ip = packet_details.get('dst_ip')
             if not (src_ip == self.target_ip or dst_ip == self.target_ip):
                 return False
             
         return True
     
-    def extract_packet_details(packet, active_filters=None):
+def extract_packet_details(packet, active_filters=None):
         """
         Extract detail from a network packet and optionally filters it using the PacketFilter.
         
@@ -104,9 +104,9 @@ class PacketFilter:
         """
         try:
             packet_details = {
-                "prtocols": None,
+                "protocols": None,
                 "src_ip": None,
-                "dts_port": None,
+                "dst_port": None,
                 "src_port": None,
                 "dst_port": None,
                 "mac_src": None,
@@ -147,11 +147,11 @@ class PacketFilter:
                 packet_details["src_ip"] = ip_layer.src
                 packet_details["dst_ip"] = ip_layer.dst
                 # Don't override protocol if it's alrady set (e.g., DNS, DHCP)
-                if not packet_details["prtocols"]:
+                if not packet_details["protocols"]:
                     packet_details["protocol"] = "IPv4"
                 packet_details["additional_info"].update({
                     "ip_version": "IPv4",
-                    "headrer_length": ip_layer.ihl * 4,
+                    "header_length": ip_layer.ihl * 4,
                     "tos": ip_layer.tos,
                     "total_length": ip_layer.len,
                     "identification": ip_layer.id,
@@ -185,7 +185,7 @@ class PacketFilter:
             if TCP in packet:
                 tcp_layer = packet[TCP]
                 packet_details["src_port"] = tcp_layer.sport
-                packet_details["dst_port"] = tcp_layer.sport
+                packet_details["dst_port"] = tcp_layer.dport
                 packet_details["protocol"] = "TCP"
 
                 #Add TCP flags
@@ -206,7 +206,7 @@ class PacketFilter:
             elif UDP in packet:
                 udp_layer = packet[UDP]
                 packet_details["src_port"] = udp_layer.sport
-                packet_details["dst_port"] = udp_layer.sport
+                packet_details["dst_port"] = udp_layer.dport
                 packet_details["protocol"] = "UDP"
             elif ICMP in packet:
                 packet_details["protocols"] = "ICMP"
@@ -263,7 +263,7 @@ class PacketFilter:
 
                                 # Hex format with offset
                                 hex_values = ' '.join(f'{b:02x}' for b in chunk)
-                                hex_lines.append(f'{b:02x} {hex_values:<47}')
+                                hex_lines.append(f'{i:04x} {hex_values:<47}')
 
                                 #ASCII format (printable chars only)
                                 ascii_chars = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in chunk)
@@ -289,7 +289,7 @@ class PacketFilter:
         
 
 
-    def format_packet_data(packet_details):
+def format_packet_data(packet_details):
         try:
             #making names for user to use
             field_mapping = {
@@ -312,7 +312,7 @@ class PacketFilter:
             if packet_details.get("additional_info"):
                 for key, value in packet_details["additional_info"].items():
                     #replaceing underscores with spaces and capitalize
-                    formated_data[key,replace("_", " ").title()] = value
+                    formated_data[key.replace("_", " ").title()] = value
             return formated_data
 
         except Exception as exception: #error handling during formating
@@ -321,7 +321,7 @@ class PacketFilter:
 
 
 
-    def handle_corrupted_packets(packet, required_layers = None):
+def handle_corrupted_packets(packet, required_layers = None):
         try: 
             # default for layer ethernet
             if required_layers is None:
@@ -341,7 +341,7 @@ class PacketFilter:
 
 
 
-    def summarize_packet(packet_details, summary_format = None):
+def summarize_packet(packet_details, summary_format = None):
         try:
             if not packet_details:
                 return "Invalid packet details" # handle case where packet details missing
@@ -590,13 +590,13 @@ def process_packet_gui(packet, active_filters = None, stats = None, output_queue
 
             #transport layer info
             if formatted_data['Protocol'] != 'ARP' and (formatted_data.get('Source Port') != 'N/A' or formatted_data.get('Destination Port') != 'N/A'):
-                output_lines.append("\Transport Layer:")
+                output_lines.append("\nTransport Layer:")
                 output_lines.append(f"Source Port:       {formatted_data['Source Port']}")
                 output_lines.append(f"Destination Port:  {formatted_data['Destination Port']}")
 
 
             #link layer info
-            output_lines.append("\Link Layer:")
+            output_lines.append("\nLink Layer:")
             output_lines.append(f"Source MAC:       {formatted_data['Source MAC']}")
             output_lines.append(f"Destination MAC:  {formatted_data['Destination MAC']}")
 
@@ -686,7 +686,7 @@ def disable_promiscous_mode(interface): #disable promiscuos mode
         print(f"Unexpected error disabling promiscuos mode: {e}")
         return False
 
-    class PacketSnifferGUI:
+class PacketSnifferGUI:
         def __init__(self,root):
             self.root = root
             self.root.title("Network Packet Sniffer ")
@@ -699,6 +699,7 @@ def disable_promiscous_mode(interface): #disable promiscuos mode
             self.setup_ui()
 
         def setup_ui(self):
+
             #Settings Frame
             settings_frame = ttk.Labelframe(self.root, text = "Capture Settings")
             settings_frame.pack(fill='x', padx=5, pady=5)
@@ -725,11 +726,11 @@ def disable_promiscous_mode(interface): #disable promiscuos mode
             self.timeout_spin = ttk.Spinbox(settings_frame, from_=0, to=1000000, textvariable=self.timeout_var)
             self.timeout_spin.grid(row=1, column=1, sticky='w')
 
-            #Target IP
             ttk.Label(settings_frame, text="Target IP:").grid(row=1, column=2, sticky='w')
+
             self.target_ip_var = tk.StringVar()
-            self.target_ip_var = ttk.Entry(settings_frame, textvariable=self.target_ip_var)
-            self.target_ip_entry.grid(row=1, column=3, sticky='w')
+            self.target_ip_entry = ttk.Entry(settings_frame, textvariable=self.target_ip_var)
+            self.target_ip_entry.grid(row =1, column=3, sticky='w')
         
             #Promiscous mode
             self.promiscuos_var = tk.BooleanVar()
@@ -766,7 +767,7 @@ def disable_promiscous_mode(interface): #disable promiscuos mode
                         var.set(False)
             else:
 
-                selected_protocols = [proto for proto, var in self.promiscuos_vars.items() if var.get()]
+                selected_protocols = [proto for proto, var in self.protocol_vars.items() if var.get()]
                 if selected_protocols:
                     self.protocol_vars['ALL'].set(False)
 
@@ -786,7 +787,7 @@ def disable_promiscous_mode(interface): #disable promiscuos mode
 
             interface = self.interface_var.get()
             packet_count = self.packet_count_var.get()
-            timeout - self.timeout_var.get()
+            timeout = self.timeout_var.get()
             target_ip = self.target_ip_var.get()
             promiscous = self.promiscuos_var.get()
 
@@ -813,10 +814,10 @@ def disable_promiscous_mode(interface): #disable promiscuos mode
             if packet_count <= 0:
                 packet_count = 0
 
-            def packet_handlet(pkt):
+            def packet_handler(pkt):
                 process_packet_gui(pkt, active_filters, stats=self.packet_stats, output_queue=self.output_queue)
 
-            self.sniffer = AsyncScniffer (
+            self.sniffer = AsyncSniffer (
                 iface = interface,
                 prn=packet_handler,
                 store=False,
@@ -915,14 +916,14 @@ def disable_promiscous_mode(interface): #disable promiscuos mode
             self.root.after(1000, self.update_output)
 
 
-    def main():
-        root = tk.Tk()
-        app = PacketSnifferGUI(root)
-        root.mainloop()
+def main():
+    root = tk.Tk()
+    app = PacketSnifferGUI(root)
+    root.mainloop()
 
     
-    if __name__ == "__main__":
-        main()
+if __name__ == "__main__":
+    main()
 
 
 
