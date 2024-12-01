@@ -17,7 +17,7 @@ from tkinter import ttk, scrolledtext, messagebox
 
 from scapy.all import (
     AsyncScniffer, Ether , IP, TCP, UDP, ICMP,
-    DHCP, BOOTP, DNS, IPv6, ARP, Raw, conf, get_if_list, get_if_addr, get_workinfg_if
+    DHCP, BOOTP, DNS, IPv6, ARP, Raw, conf, get_if_list, get_if_addr, get_working_if
 )
 from scapy.arch import get_if_raw_addr
 import netifaces 
@@ -286,3 +286,392 @@ class PacketFilter:
         except Exception as exception:
             print(f"Problems with processing packet: {packet} the problem is {exception}")
             return None
+        
+
+
+    def format_packet_data(packet_details):
+        try:
+            field_mapping = {
+                "protocol" : "Protocol",
+                "src_ip" : "Source IP",
+                "dest_ip" : "Destination IP",
+                "src_port" : "Source Port",
+                "dst_port" : "Destination Port",
+                "mac_src" : "Source MAC",
+                "mac_dst" : "Destination MAC"
+            }
+
+            formated_data = {
+                display_name: packet_details.get(field, "N/A")
+                for field, display_name in field_mapping.items()
+            }
+
+            if packet_details.get("additional_info"):
+                for key, value in packet_details["additional_info"].items():
+                    formated_data[key,replace("_", " ").title()] = value
+            return formated_data
+
+        except Exception as exception:
+            print(f"Problem formatting: {packet_details}.Error: {exception}")
+            return None
+
+
+
+    def handle_corrupted_packets(packet, required_layers = None):
+        try: 
+            if required_layers is None:
+                required_layers = [Ether] # modified to only require Ether for IPv6 support
+            
+            for layer in required_layers:
+                if not packet.haslayer(layer):
+                    print(f"Packet missing layer: {layer.__name__}")
+                    return False
+            return True
+        
+        except Exception as exception:
+            print(f"Problem validating packet: {packet.summary() if packet else 'None'}.Exception: {exception}")
+            return False
+
+
+
+    def summarize_packet(packet_details, summary_format = None):
+        try:
+            if not packet_details:
+                return "Invalid packet details"
+
+            if summary_format is None:
+                summary_format = "[{protocol}] {src_ip}:{src_port} -> {dst_ip}:{dst_port}"
+
+            #Preparing database with default values
+            defaults = {
+                "protocol" : "Unknown",
+                "src_ip" : "N/A",
+                "src_port" : "N/A",
+                "dest_ip" : "N/A",
+                "dst_port" : "N/A"
+            }
+
+            data = {key:packet_details.get(key, default) for key, default in defaults.items()}
+            
+            #Protocol info added to summary
+            additional_info = packet_details.get("additional_info", {})
+            if additional_info:
+                #TCP handeled with SYN/ACK flags and IP info
+                if data["protocol"] == "TCP":
+                    #Adding TCP flags if there are some
+                    if "tcp_flags" in additional_info and additional_info["tcp_flags"]:
+                        summary_format += "[{tcp_flags}]"
+                        data["tcp_flags"] = additional_info["tcp_flags"]
+                        if "connection_state" in additional_info:
+                            summary_format += "({connection_state})"
+                            data["connection_state"] = additional_info["connection_state"]
+
+
+                    #Adding IP header info
+                    ip_info_parts = []
+                    if "ttl" in additional_info:
+                        ip_info_parts.append("TTL: {ttl}")
+                        data["ttl"] = additional_info["ttl"]
+                    if "checksum" in additional_info:
+                        ip_info_parts.append("Checksum: {checksum}")
+                        data["checksum"] = additional_info["checksum"]
+                    if "ip_flags" in additional_info:
+                        ip_info_parts.append("Flags: {ip_flags}")
+                        data["ip_flags"] = additional_info["ip_flags"]
+
+                    if ip_info_parts:
+                        summary_format += f"[{', '.join(ip_info_parts)}]"
+
+                    
+                #Handle DNS
+                elif data["protocol"] == "DNS" and "dns_type" in additional_info:
+                    summary_format += "({dns_type})"
+                    data["dns_type"] = additional_info["dns_type"]
+                    if "dns_query" in additional_info:
+                        summary_format += "Query: {dns_query}"
+                        data["dns_query"] = additional_info["dns_query"]
+
+
+                #Handle DHCP
+                elif data["protocol"] == "DHCP" and "dhcp_type" in additional_info:
+                    summary_format += "({dhcp_type})"
+                    data["dhcp_type"] = additional_info["dhcp_type"]
+
+                
+                #Handle IPv6
+                elif data["protocol"] == "IPv6":
+                    summary_format += "[Hop Limit: {hop_limit}]"
+                    data["hop_limit"] = additional_info.get["hop_limit", "N/A"]
+
+
+                #Handle UDP with IP info
+                elif data["protocol"] == "UDP":
+                    ip_info_parts = []
+                    if "ttl" in additional_info:
+                        ip_info_parts.append("TTL: {ttl}")
+                        data["ttl"] = additional_info["ttl"]
+                    if "checksum" in additional_info:
+                        ip_info_parts.append("Checksum: {checksum}")
+                        data["checksum"] = additional_info["checksum"]
+
+                    if ip_info_parts:
+                        summary_format += f"[{', '.join(ip_info_parts)}]"
+
+            return summary_format.format(**data)
+
+
+        except Exception as exception:
+            print(f"Error with summarizing packet: {packet_details}. Exception: {exception}")
+            return "Problem with creating summary of packet"
+
+    
+class NetworkMonitor:
+    @staticmethod
+    def get_interface_details():
+        #Geting detailed info about all network interfaces
+        interfaces = {}
+
+        #Get all interfaces
+        for iface in get_if_list():
+            try: 
+                #get interface addresses
+                addrs = netifaces.ifaddresses(iface)
+
+                #get status
+                if_stats = psutil.net_if_stats().get(iface)
+                is_up = if_stats.isup if if_stats else False
+
+                interfaces[iface] = {
+                    'ip': get_if_addr(iface),
+                    'mac': addrs.get(netifaces.AF_LINK, [{'addr': 'Unknown'}])[0]['addr'],
+                    'is_up': is_up,
+                    'speed': if_stats.speed if if_stats else 0,
+                    'mtu': if_stats.mtu if if_stats else 0
+                }
+
+                #Get additional IPv4 info if possible
+                if netifaces.AF_INET in addrs:
+                    ipv4_info = addrs[netifaces.AF_INET][0]
+                    interfaces[iface].update({
+                        'netmask': ipv4_info.get('netmask', 'Unknown'),
+                        'broadcast': ipv4_info.get('broadcast', 'Unknown')
+                    })
+
+            except Exception as e:
+                print(f"Error getting details for {iface}: {e}")
+                continue
+        
+        return interfaces
+
+    @staticmethod
+    def get_best_interface():
+        #get the best interface for capturing
+        #we try to get interface first
+        default_iface = conf.iface
+
+        #if not possible then get the first working interface
+        if not default_iface:
+            default_iface = get_working_if
+
+        return default_iface
+
+    @staticmethod
+    def verify_interface(interface):
+        #verify if an interface exists and is suitable for capture
+        interfaces = NetworkMonitor.get_interface_details()
+
+        if interface not in interface:
+            print(f"Error: Interface '{interface}' not found")
+            return False
+
+        details = interfaces[interface]
+        if not details ['is_up']:
+            print(f"Warning: Interface '{interface}' is down")
+            return False
+        
+        return True
+
+    
+class PacketStats:
+    def __init__ (self):
+        self.packet_counts = Counter()
+        self.total_packets = 0
+        self.total_bytes = 0
+        self.start_time = datetime.now()
+        self.current_packet_number = 0
+        self.ip_stats = {
+            'src': defaultdict(int),
+            'dst': defaultdict(int)
+        }
+        self.port_stats = {
+            'src': defaultdict(int),
+            'dst': defaultdict(int)
+        }
+        self.protocol_bytes = defaultdict(int)
+
+def process_packet_gui(packet, active_filters = None, stats = None, output_queue = None):
+    try:
+        #Extract details with filtering
+        packet_details = extract_packet_details(packet, active_filters)
+
+        if packet_details is None: # if details dont match filter skip
+            return
+
+
+        if stats is not None:
+            stats.total_packets += 1
+            stats.current_packet_number += 1
+            stats.packet_counts[packet_details['protocol']] += 1
+
+        
+            #track total bytes
+            stats.total_bytes += len(packet)
+
+            #track bytes per protocol
+            stats.protocol_bytes[packet_details['protocol']] += len(packet)
+
+
+            #track IP stats
+            if packet_details.get('src_ip'):
+                stats.ip_stats['src'][packet_details['src_ip']] += 1
+            if packet_details.get('dst_ip'):
+                stats.ip_stats['dst'][packet_details['dst_ip']] += 1
+            
+            #track port statistics
+            if packet_details.get('src_ip'):
+                src_port = int(packet_details['src_port'])
+                stats.port_stats['src'][src_port] += 1
+            if packet_details.get('dst_ip'):
+                dst_ip = int(packet_details['dst_ip'])
+                stats.port_stats['dst'][dst_ip] += 1
+
+            output_lines = []
+
+            output_lines.append(f"\nPacket #{stats.current_packet_number}")
+            output_lines.append(f"Info: {packet.summary()}")
+
+
+            if not handle_corrupted_packets(packet):
+                output_lines.append(f"Corrupted or unsupported packet is skipped: {packet.summary()}")
+                return
+
+            formatted_data = format_packet_data(packet_details)
+            if not formatted_data:
+                output_lines.append("Failed to format packet details")
+                return
+
+            summary = sumarize_packet(packet_details)
+
+            #create a more detailed output based on protocol type
+            output_lines.append("\n" + "="*60)
+            output_lines.append(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%m:%S.%f')[:-3]}")
+            output_lines.append("-"*60)
+
+
+            #basic protocol info
+            output_lines.append(f"Protocol: {formatted_data['Protocol']}")
+
+
+            #network layer info
+            output_lines.append("\nNetwork Layer:")
+            output_lines.append(f"Source IP:       {formatted_data['Source IP']}")
+            output_lines.append(f"Destination IP:  {formatted_data['Destination IP']}")
+
+
+            #transport layer info
+            if formatted_data['Protocol'] != 'ARP' and (formatted_data.get('Source Port') != 'N/A' or formatted_data.get('Destination Port') != 'N/A'):
+                output_lines.append("\Transport Layer:")
+                output_lines.append(f"Source Port:       {formatted_data['Source Port']}")
+                output_lines.append(f"Destination Port:  {formatted_data['Destination Port']}")
+
+
+            #link layer info
+            output_lines.append("\Link Layer:")
+            output_lines.append(f"Source MAC:       {formatted_data['Source MAC']}")
+            output_lines.append(f"Destination MAC:  {formatted_data['Destination MAC']}")
+
+
+            #protocol spec. info
+            protocol_specific = {k: v for k, v in formatted_data.items()
+                                if k not in ['Protocol', 'Source IP', 'Destination IP',
+                                            'Source Port', 'Destination Port', 
+                                            'Source MAC', 'Destination MAC']}
+
+            if protocol_specific:
+                output_lines.append("\nProtocol Details:")
+                for key, value in protocol_specific.items():
+                    output_lines.append(f"{key}: {value}")
+
+            
+            #Payload info
+            if packet_details["payload"]["length"] > 0:
+                output_lines.append("\nPayload Information:")
+                output_lines.append(f"Length: {packet_details['payload']['length']} bytes")
+
+
+                if packet_details["payload"]["hex"]:
+                    output_lines.append("\nHexadecimal dump:")
+                    output_lines.append("-"*60)
+                    output_lines.append(packet_details["payload"]["hex"])
+
+                
+                if packet_details["payload"]["ascii"]:
+                    output_lines.append("\nASCII dump:")
+                    output_lines.append("-"*60)
+                    output_lines.append(packet_details["payload"]["ascii"])
+
+                
+                output_lines.append("\nSummary:")
+                output_lines.append(summary)
+                output_lines.append("="*60)
+
+                #put the output lines into the queue
+                if output_queue:
+                    output_queue.put('\n'.join(output_lines))
+
+
+    except Exception as exception:
+        print(f"Error with processing packet: {exception}")
+
+
+def enable_promiscous_mode(interface): #enable promiscuous mode
+    try: 
+        if os.name == 'posix': #linux 
+            subprocess.run(['ip', 'link', 'set', interface, 'promisc', 'on'],
+                check = True, capture_output= True)
+            print(f"Enabled promiscuous mode on {interface}")
+    
+            #verify
+            result = subprocess.run(['ip', 'link', 'set', interface, 'promisc', 'on'],
+                    check = True, capture_output= True)
+            if 'PROMISC' in result.stdout:
+                print("Verified: Promiscous mode is active")
+            else: 
+                print("Warning: Could not verify promiscuos mode")
+
+        elif os.name == 'nt' : #Windows
+            print(f"Promiscuos mode handling is automatic on Windows")
+        return True
+    
+    except subprocess.CalledProcessError as e:
+        print(f"Error enabling promiscous mode: {e}")
+        return False
+    except Exception as e:
+        print(f"Unexpected error enabling promiscuos mode: {e}")
+        return False
+
+
+def disable_promiscous_mode(interface): #disable promiscuos mode
+    try: 
+        if os.name == 'posix': #linux 
+            subprocess.run(['ip', 'link', 'set', interface, 'promisc', 'on'],
+                check = True, capture_output= True)
+            print(f"Disabled promiscuous mode on {interface}")
+            return True
+    
+    except subprocess.CalledProcessError as e:
+        print(f"Error disabling promiscous mode: {e}")
+        return False
+    except Exception as e:
+        print(f"Unexpected error disabling promiscuos mode: {e}")
+        return False
